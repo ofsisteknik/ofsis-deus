@@ -1,0 +1,136 @@
+name: Fetch Earthquake Data
+
+on:
+  schedule:
+    # Her 15 dakikada bir = 96 istek/gün (sismikharita 100/gün limitinin altında)
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Elle tetikleme
+
+jobs:
+  fetch-earthquakes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch AFAD + Sismik Harita Earthquake Data
+        run: |
+          python3 << 'PYEOF'
+          import urllib.request
+          import urllib.parse
+          import json
+          import sys
+          import os
+          from datetime import datetime, timedelta, timezone
+
+          now = datetime.now(timezone.utc)
+          past_3h = now - timedelta(hours=3)
+
+          def fmt(d):
+              return d.strftime("%Y-%m-%d %H:%M:%S")
+
+          def fetch_url(url, label):
+              req = urllib.request.Request(url, headers={
+                  "User-Agent": "Mozilla/5.0 (compatible; OFSISBot/1.0; +https://github.com/ofsisteknik)",
+                  "Accept": "application/json"
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      raw = resp.read().decode("utf-8")
+                      print(f"[{label}] HTTP {resp.status}, {len(raw)} bytes")
+                      return json.loads(raw)
+              except Exception as e:
+                  print(f"[{label}] Fetch error: {e}")
+                  return None
+
+          # ── 1. AFAD (son 3 saat, Türkiye) ─────────────────────────────────────
+          params = urllib.parse.urlencode({
+              "start": fmt(past_3h),
+              "end":   fmt(now),
+              "limit": "200",
+              "orderby": "timedesc"
+          })
+          afad_url = f"https://deprem.afad.gov.tr/apiv2/event/filter?{params}"
+          print(f"[AFAD] URL: {afad_url}")
+
+          afad_data = fetch_url(afad_url, "AFAD")
+          if isinstance(afad_data, list):
+              print(f"[AFAD] {len(afad_data)} deprem alındı")
+          else:
+              print("[AFAD] Geçersiz yanıt, boş liste kullanılacak")
+              afad_data = []
+
+          # ── 2. Sismik Harita (son 3 saat, TR sınırları) ───────────────────────
+          # TR sınırları: Lat 35-43, Lon 25-46
+          # limit=100 parametresi → günlük 96 istek ≤ 100 limit
+          sismik_url = "https://sismikharita.com/api.php?limit=100"
+          print(f"[SismikHarita] URL: {sismik_url}")
+
+          sismik_raw = fetch_url(sismik_url, "SismikHarita")
+          sismik_data = []
+          if sismik_raw and sismik_raw.get("status") == "success":
+              all_eq = sismik_raw.get("earthquakes", [])
+              cutoff_ts = past_3h.timestamp()
+              for eq in all_eq:
+                  # Zaman filtresi (son 3 saat)
+                  try:
+                      occurred = eq.get("occurred_at", "")
+                      if occurred:
+                          # "2026-06-05T10:00:00" formatı
+                          dt = datetime.fromisoformat(occurred.replace("Z", "+00:00"))
+                          if dt.timestamp() < cutoff_ts:
+                              continue
+                  except Exception:
+                      pass
+
+                  # Türkiye coğrafi sınırları
+                  try:
+                      lat = float(eq.get("latitude", 0))
+                      lon = float(eq.get("longitude", 0))
+                      if not (35.0 <= lat <= 43.0 and 25.0 <= lon <= 46.0):
+                          continue
+                  except Exception:
+                      continue
+
+                  sismik_data.append(eq)
+
+              print(f"[SismikHarita] {len(sismik_data)} deprem (filtre sonrası, toplam: {len(all_eq)})")
+          else:
+              print("[SismikHarita] Geçersiz yanıt veya hata")
+
+          # ── 3. Sonucu yaz ─────────────────────────────────────────────────────
+          output = {
+              "updatedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "afad": afad_data,
+              "sismik": sismik_data
+          }
+
+          with open("earthquakes.json", "w", encoding="utf-8") as f:
+              json.dump(output, f, ensure_ascii=False, separators=(',', ':'))
+
+          print(f"[OK] earthquakes.json yazıldı — AFAD: {len(afad_data)}, Sismik: {len(sismik_data)}")
+          PYEOF
+
+      - name: Commit and push to public repository
+        env:
+          PUBLIC_REPO_PAT: ${{ secrets.API_TOKEN_GITHUB }}
+        run: |
+          # Kamuya açık (public) olan sayfaya push atabilmek için repoyu PAT ile klonluyoruz
+          git clone https://x-access-token:${PUBLIC_REPO_PAT}@github.com/ofsisteknik/ofsis-deus.git public-repo
+          cp earthquakes.json public-repo/
+          cd public-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add earthquakes.json
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          git diff --cached --quiet \
+            && echo "Değişiklik yok, commit atlanıyor" \
+            || (git commit -m "chore: deprem verisi güncellendi [$TIMESTAMP]" && git push origin main)
+
+

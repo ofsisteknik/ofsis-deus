@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "OFSİS",
+    "slug": "deus-app",
+    "version": "1.0.0",
+    "scheme": "ofsis",
+    "orientation": "portrait",
+    "icon": "./assets/ofSisLogo.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0e1a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "io.ofsis.app"
+    },
+    "android": {
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBhdc7oH6bG2vzgVRzrZ673LDKHcNeyyRM" 
+        }
+      },
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/ofSisLogo.png",
+        "backgroundColor": "#0a0e1a"
+      },
+      "package": "io.ofsis.app"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#e84b4b",
+          "sounds": ["./assets/alarm.wav"]
+        }
+      ]
+    ],
+    "experiments": {
+      "baseUrl": "/ofsis-deus",
+      "typedRoutes": true
+    }
+  }
+}

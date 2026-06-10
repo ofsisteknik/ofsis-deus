@@ -444,7 +444,6 @@ export default function DashboardPage() {
                           )}
                           {eq.location}
                         </h3>
-                        <span className="eq-provider-tag">{eq.provider}</span>
                       </div>
 
                       <div className="eq-details-row">

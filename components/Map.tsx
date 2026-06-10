@@ -251,9 +251,8 @@ export default function EarthquakeMap({
               🚨 EN SON SİSMİK AKTİVİTE (SON 24 SAAT)
             </div>
           ` : ''}
-          <h4 style="margin: 0 0 6px 0; font-size: 14px; font-weight: 800; color: ${color}; display: flex; align-items: center; justify-content: space-between;">
-            <span>${eq.magnitude.toFixed(1)} ${eq.magnitudeScale}</span>
-            <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.06); font-weight: normal; color: #64748b;">${eq.provider}</span>
+          <h4 style="margin: 0 0 6px 0; font-size: 14px; font-weight: 800; color: ${color};">
+            ${eq.magnitude.toFixed(1)} ${eq.magnitudeScale}
           </h4>
           <div style="font-size: 12px; font-weight: 600; color: #0f172a; margin-bottom: 4px;">${eq.location}</div>
           <div style="font-size: 11px; color: #475569; margin-bottom: 2px;">Derinlik: <strong>${eq.depth} km</strong></div>

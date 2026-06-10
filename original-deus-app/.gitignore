@@ -1,0 +1,18 @@
+node_modules/
+.expo/
+dist/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Native builds
+# If you are doing prebuilds locally, keep these in .gitignore
+android/
+ios/
+
+# macOS/Windows system files
+.DS_Store
+Thumbs.db
+
+# Expo env files
+expo-env.d.ts
