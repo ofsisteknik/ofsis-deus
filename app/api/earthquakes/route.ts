@@ -3,6 +3,39 @@ import { NextResponse } from 'next/server';
 let cachedSismikData: any = null;
 let lastSismikFetchTime = 0;
 
+// Cache for the last known "good" full dataset from primary sources
+let lastGoodPrimaryEvents: any[] = [];
+let lastGoodPrimaryTime = 0;
+
+// Helper: Haversine distance between two coordinates (km)
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Check if a fallback event is consistent with the last known primary event
+// (same region within 200km and within 30 minutes)
+function isFallbackConsistentWithPrimary(fallbackLatest: any, primaryLatest: any): boolean {
+  if (!fallbackLatest || !primaryLatest) return false;
+
+  const dist = haversineKm(
+    fallbackLatest.latitude, fallbackLatest.longitude,
+    primaryLatest.latitude, primaryLatest.longitude
+  );
+  const timeDiffMs = Math.abs(
+    new Date(fallbackLatest.timestamp).getTime() - new Date(primaryLatest.timestamp).getTime()
+  );
+
+  // Allow up to 200km distance and 30 minutes time difference for the most recent event
+  return dist <= 200 && timeDiffMs <= 30 * 60 * 1000;
+}
+
 export async function GET(request: Request) {
   const now = Date.now();
   const nowStr = new Date(now).toISOString().split('.')[0].replace('T', ' ');
@@ -88,6 +121,12 @@ export async function GET(request: Request) {
     console.error('Error fetching direct AFAD event-service server-side:', e);
   }
 
+  // Update the last-good primary cache whenever primary sources succeed
+  if (primarySuccess && rawEvents.length > 0) {
+    lastGoodPrimaryEvents = [...rawEvents];
+    lastGoodPrimaryTime = now;
+  }
+
   // 3. Fallback to api.orhanaydogdu.com.tr ONLY if both primary sources failed to fetch any data
   if (!primarySuccess || rawEvents.length === 0) {
     try {
@@ -110,12 +149,67 @@ export async function GET(request: Request) {
             timestamp: new Date(eq.created_at * 1000).toISOString(),
             provider: 'AFAD (FALLBACK)',
           }));
-          rawEvents.push(...mappedFallback);
-          sourcesFetched.push('Orhan Aydogdu (Fallback API)');
+
+          // --- SMART FALLBACK: Consistency check with last known primary data ---
+          // If we have a recent good primary dataset (within last 2 hours), use it as base
+          // and only merge in genuinely new events from the fallback source.
+          const hasFreshPrimaryCache =
+            lastGoodPrimaryEvents.length > 0 &&
+            now - lastGoodPrimaryTime < 2 * 60 * 60 * 1000; // within 2 hours
+
+          if (hasFreshPrimaryCache && mappedFallback.length > 0) {
+            // Sort fallback events newest first
+            const sortedFallback = [...mappedFallback].sort(
+              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+            const sortedPrimary = [...lastGoodPrimaryEvents].sort(
+              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+
+            const fallbackLatest = sortedFallback[0];
+            const primaryLatest = sortedPrimary[0];
+
+            const consistent = isFallbackConsistentWithPrimary(fallbackLatest, primaryLatest);
+
+            if (consistent) {
+              // Fallback data is consistent with primary — keep the large primary cache
+              // and only append genuinely newer events from fallback (not already in primary)
+              const primaryNewestTime = new Date(primaryLatest.timestamp).getTime();
+              const newFromFallback = sortedFallback.filter(
+                (fb) => new Date(fb.timestamp).getTime() > primaryNewestTime
+              );
+
+              rawEvents = [...lastGoodPrimaryEvents, ...newFromFallback];
+              sourcesFetched.push(
+                newFromFallback.length > 0
+                  ? `Orhan Aydogdu (Fallback + ${newFromFallback.length} yeni kayıt)`
+                  : 'Orhan Aydogdu (Tutarlı — Birincil Önbellek Korundu)'
+              );
+              console.warn(
+                `[OFSİS] Yedek API tutarlı bulundu. Birincil önbellekteki ${lastGoodPrimaryEvents.length} kayıt korundu, ${newFromFallback.length} yeni kayıt eklendi.`
+              );
+            } else {
+              // Fallback data inconsistent or primary cache is stale — use fallback as-is
+              rawEvents.push(...mappedFallback);
+              sourcesFetched.push('Orhan Aydogdu (Fallback API — Tutarsız/Eski Önbellek)');
+              console.warn('[OFSİS] Yedek API verisi birincil önbellekle tutarsız veya önbellek çok eski. Yedek veri kullanılıyor.');
+            }
+          } else {
+            // No recent primary cache available — use fallback data directly
+            rawEvents.push(...mappedFallback);
+            sourcesFetched.push('Orhan Aydogdu (Fallback API)');
+          }
         }
       }
     } catch (fallbackErr) {
       console.error('Fallback API also failed server-side:', fallbackErr);
+
+      // Last resort: if fallback also fails but we have a primary cache, use it
+      if (lastGoodPrimaryEvents.length > 0) {
+        rawEvents = [...lastGoodPrimaryEvents];
+        sourcesFetched.push('Birincil Önbellek (Tüm API\'ler Başarısız)');
+        console.warn('[OFSİS] Tüm API\'ler başarısız. Son iyi birincil veri önbelleği kullanılıyor.');
+      }
     }
   }
 
